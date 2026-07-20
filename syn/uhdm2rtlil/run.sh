@@ -12,8 +12,8 @@ export R5P_TCB="$(cd ../../submodules/tcb/hdl/rtl && pwd 2>/dev/null || echo /no
 source ./designs.sh
 
 mkdir -p work
-printf '%-20s  %-10s  %s\n' DESIGN SYNTH CO-SIM
-printf '%-20s  %-10s  %s\n' "------" "-----" "------"
+printf '%-20s  %-10s  %-8s  %s\n' DESIGN SYNTH CO-SIM FUNC-SIM
+printf '%-20s  %-10s  %-8s  %s\n' "------" "-----" "------" "--------"
 
 rc_all=0
 for d in $(design_list); do
@@ -31,10 +31,18 @@ for d in $(design_list); do
     fi
 
     cosim="-"
-    if [ "$COSIM" = "yes" ] && [ "$synth" = "ok" ]; then
+    if [ "$COSIM" = "yes" ] && [ "${synth%%(*}" = "ok" ]; then
         if ./cosim.sh >"work/${d}.cosim.log" 2>&1; then cosim="PASS"
         else cosim="FAIL"; rc_all=1; fi
     fi
-    printf '%-20s  %-10s  %s\n' "$d" "$synth" "$cosim"
+
+    # Functional sim: boot boot.hex on the netlist and check GPIO (no Verilator
+    # reference needed, so it also covers the TCB-interface SoCs).
+    fsim="-"
+    if [ "$FSIM" = "yes" ] && [ "${synth%%(*}" = "ok" ]; then
+        if ./fsim.sh "$d" >"work/${d}.fsim.log" 2>&1; then fsim="PASS"
+        else fsim="FAIL"; rc_all=1; fi
+    fi
+    printf '%-20s  %-10s  %-8s  %s\n' "$d" "$synth" "$cosim" "$fsim"
 done
 exit $rc_all
