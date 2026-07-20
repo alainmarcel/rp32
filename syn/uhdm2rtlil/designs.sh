@@ -60,6 +60,9 @@ design_list() {
 
 design_select() {
     COSIM="no"
+    # FSIM="yes" marks an SoC that boots boot.hex and drives GPIO, so fsim.sh can
+    # functionally simulate it (Yosys `sim`, no Verilator reference needed).
+    FSIM="no"
     case "$1" in
       # --- cores ---------------------------------------------------------
       mouse)
@@ -75,7 +78,7 @@ design_select() {
       mouse_soc_simple)
         TOP=r5p_mouse_soc_simple_top
         SRCS="$R5P_RTL/mouse/r5p_mouse.sv $R5P_RTL/soc/r5p_mouse_soc_simple_top.sv"
-        COSIM="yes" ;;
+        COSIM="yes"; FSIM="yes" ;;
       mouse_soc)
         TOP=r5p_mouse_soc_top
         SRCS="$R5P_TCB/tcb_lite_pkg.sv $R5P_TCB/tcb_lite_if.sv $(_tcb_soc_lib) \
@@ -90,10 +93,12 @@ design_select() {
         # exactly the SystemVerilog uhdm2rtlil handles and the native Verilog/
         # Verilator flow can't, so there is no independent RTL reference to
         # co-simulate the full TCB-interface SoC against.  The discrete
-        # `mouse_soc_simple` (no interfaces) IS Verilatable and stays cosim'd;
-        # the interface SoC's frontend correctness is covered by the per-module
-        # tests + its structural `check` in the uhdm2rtlil suite.
-        ;;
+        # `mouse_soc_simple` (no interfaces) IS Verilatable and stays cosim'd.
+        # Instead, FSIM="yes" runs fsim.sh: it BOOTS boot.hex on the synthesised
+        # netlist with Yosys `sim` and checks GPIO reaches the written values —
+        # an end-to-end functional check that needs no independent reference, so
+        # it validates the full TCB-interface SoC.
+        FSIM="yes" ;;
       degu_soc)
         TOP=r5p_degu_soc_top
         SRCS="$R5P_TCB/tcb_lite_pkg.sv $R5P_TCB/tcb_lite_if.sv $(_tcb_soc_lib) \
@@ -103,7 +108,8 @@ design_select() {
               $R5P_RTL/degu/r5p_alu.sv $R5P_RTL/degu/r5p_mdu.sv \
               $R5P_RTL/degu/r5p_lsu.sv $R5P_RTL/degu/r5p_wbu.sv \
               $R5P_RTL/degu/r5p_degu_pkg.sv $R5P_RTL/degu/r5p_degu.sv \
-              $R5P_RTL/soc/r5p_soc_memory__gowin_inference.sv $R5P_RTL/soc/r5p_degu_soc_top.sv" ;;
+              $R5P_RTL/soc/r5p_soc_memory__gowin_inference.sv $R5P_RTL/soc/r5p_degu_soc_top.sv"
+        FSIM="yes" ;;
       *)
         echo "unknown design '$1'; known: $(design_list)" >&2
         return 1 ;;

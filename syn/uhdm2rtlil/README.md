@@ -8,10 +8,16 @@ Surelog parses the design to UHDM and the uhdm2rtlil plugin imports it to Yosys
 RTLIL (`read_sv`), so the full IEEE‑1800 SystemVerilog the rp32 cores use
 (packages, structs, interfaces) is synthesisable through Yosys.
 
-The gate‑level result is **verified by co‑simulation**: the synthesized netlist
-is run against the original RTL under Verilator and the outputs are compared
-every cycle — the same methodology uhdm2rtlil uses for designs the native Yosys
-Verilog front end cannot parse.
+The gate‑level result is verified two ways:
+
+* **Co‑simulation** (`cosim.sh`): the synthesized netlist is run against the
+  original RTL under Verilator and the outputs are compared every cycle.
+* **Functional simulation** (`fsim.sh`): the SoC boots its program on the
+  synthesized netlist under Yosys `sim` and the GPIO output is checked against
+  the values the program writes.  This needs **no independent reference**, so it
+  validates the full **TCB‑interface** SoCs (`mouse_soc`, `degu_soc`) that
+  Verilator can't elaborate (it can't unroll the `tcb_lite_if` delay‑line
+  `for (genvar i=1; i<=CFG.HSK.DLY; i++)`).
 
 ## Prerequisites
 
@@ -34,7 +40,8 @@ cd syn/uhdm2rtlil
 ./build.sh --list             # list the catalogued designs
 ./build.sh mouse_soc_simple   # synthesise one design (work/<top>_uhdm.v/.json)
 ./cosim.sh                    # gate-level co-sim of the Mouse simple SoC
-./run.sh                      # synthesise ALL designs + co-sim, print a table
+./fsim.sh  mouse_soc          # boot the SoC on its netlist, check GPIO (func-sim)
+./run.sh                      # synthesise ALL designs + co-sim + func-sim, table
 ```
 
 The design catalog (cores + SoCs) lives in `designs.sh`; `build.sh <name>` picks
@@ -46,21 +53,26 @@ git submodule update --init submodules/tcb
 
 ## Design status
 
-`./run.sh` synthesises every design and co-simulates the ones with a
-deterministic self-contained testbench:
+`./run.sh` synthesises every design, co-simulates the ones Verilator can build
+as an independent reference, and **functionally simulates** the SoCs (boot the
+program, check GPIO — no reference needed):
 
-| design              | synth | co-sim | notes |
-|---------------------|:-----:|:------:|-------|
-| `mouse`             | ✅ | (det.) | standalone core; only deterministic streams are equiv-able |
-| `mouse_soc_simple`  | ✅ | ✅ **PASS** | complete Mouse SoC, inline RAM — 0 mismatches / 6000 cyc |
-| `mouse_soc`         | ⚠️ | n/a | full Mouse SoC synthesises but is functionally stuck — the TCB **interface-config** struct refs (`sub.CFG.HSK.DLY`, `sub.MOD`) are unresolved (front-end limitation); Verilator can't build the interface RTL either, so no co-sim |
-| `degu`              | ⚠️ | n/a | core synthesises with unresolved TCB interface-config reads |
-| `degu_soc`          | ⚠️ | n/a | as above |
-| `hamster`           | ⚠️ | n/a | core synthesises with unresolved decoder-struct reads (`idu_rdt.jmp.jmp`) |
+| design              | synth | co-sim | func-sim | notes |
+|---------------------|:-----:|:------:|:--------:|-------|
+| `mouse`             | ✅ | (det.) | – | standalone core; only deterministic streams are equiv-able |
+| `hamster`           | ✅ | (det.) | – | standalone core (decoder rewired to the flat `dec_t`) |
+| `degu`              | ✅ | (det.) | – | standalone core |
+| `mouse_soc_simple`  | ✅ | ✅ **PASS** | ✅ **PASS** | discrete Mouse SoC, inline RAM — cosim 0 mismatches / 6000 cyc; boots to `gpio_o`=0x5a→0xff |
+| `mouse_soc`         | ✅ | n/a | ✅ **PASS** | full TCB-interface Mouse SoC; Verilator can't build the interface RTL (delay-line genloop), so no cosim — instead func-sim boots it: `gpio_e`=0x5a→0xff |
+| `degu_soc`          | ✅ | n/a | ✅ **PASS** | full TCB-interface Degu SoC; func-sim boots it: `gpio_e`=0x5a→0xff |
 
-✅ = clean; ⚠️ = produces a netlist but with unresolved struct/interface reads
-(undriven wires ⇒ not functionally correct yet).  The remaining gaps are all
-SystemVerilog-interface-config resolution in the UHDM front end.
+All six designs synthesise to clean netlists.  The interface SoCs report a few
+benign warnings (undriven CPU `req.byt`/`lck`/`ndn` don't-cares, cosmetic
+interface-array port resizes) but are **functionally correct end-to-end** — the
+CPU boots the program from the initialised imem and the store propagates through
+the TCB interface fabric to the GPIO peripheral's register.  (GPIO register 0 is
+the *output-enable* on the `tcb_dev_gpio` peripheral, so the boot writes land in
+`gpio_e`; the discrete `mouse_soc_simple` GPIO maps register 0 to `gpio_o`.)
 
 ## The memory‑preserving synthesis flow
 
@@ -84,10 +96,11 @@ the combinational read port.
 |-----------------|------------------------------------------------------------------|
 | `designs.sh`    | design catalog: name → sources + top (cores + SoCs)             |
 | `build.sh`      | synthesise one design through uhdm2rtlil (memory‑preserving flow)|
-| `run.sh`        | synthesise all designs + co‑sim, print a status table           |
+| `run.sh`        | synthesise all designs + co‑sim + func‑sim, print a status table |
 | `cosim.sh`      | synth + Verilator co‑simulation (RTL vs gate netlist)            |
 | `cosim_tb.sv`   | testbench: RTL and gate netlist side by side, per‑cycle compare  |
 | `cosim_main.cpp`| Verilator driver (reset, free‑run, exit non‑zero on mismatch)    |
+| `fsim.sh`       | boot the SoC on its netlist (Yosys `sim`) and check GPIO output   |
 | `boot.hex`      | tiny deterministic boot program (GPIO writes) for the SoC RAM    |
 
 `work/` (netlists, logs, Verilator objects) is generated and git‑ignored.
